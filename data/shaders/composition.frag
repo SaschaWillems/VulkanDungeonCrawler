@@ -67,7 +67,7 @@ void main()
 			float NdotR = max(0.0, dot(R, V));
 			vec3 spec = ubo.lights[i].color * albedo.a * pow(NdotR, 16.0) * atten;
 
-			fragcolor += diff + spec;	
+			fragcolor += diff;// + spec;	
 		}	
 	}    	
    
