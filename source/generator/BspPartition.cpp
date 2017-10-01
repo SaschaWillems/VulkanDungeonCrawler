@@ -26,7 +26,7 @@ namespace dungeongenerator {
 		this->centerY = round(top + (float)(bottom - top) / 2.0f);
 		
 		// Don't split if any of the dimensions is below certain threshold
-		if ((right - left <= 16) || (bottom - top <= 16)) {
+		if ((depth > 0) && ((right - left <= 8) || (bottom - top <= 8))) {
 			return;
 		}
 

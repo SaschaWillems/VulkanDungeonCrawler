@@ -134,7 +134,7 @@ public:
 		title = "Vulkan Dungeon Crawler";
 		enableTextOverlay = true;
 
-		srand(NULL);
+		srand(time(NULL));
 
 		dungeon = new dungeongenerator::Dungeon(64, 64);
 		dungeon->generateRooms();
@@ -152,7 +152,7 @@ public:
 		}
 		else {
 			camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-			camera.setTranslation(glm::vec3(startingRoom->centerX, 0.5f, startingRoom->centerY));
+			camera.setTranslation(glm::vec3(-(startingRoom->centerX - dungeon->width * 0.5f), 0.5f, -(startingRoom->centerY - dungeon->width * 0.5f)));
 		}
 
 		camera.movementSpeed *= 4.0f;
