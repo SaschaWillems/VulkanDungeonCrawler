@@ -9,6 +9,7 @@
 #pragma once
 
 #include <vector>
+#include "vulkan/vulkan.h"
 #include <glm\glm.hpp>
 
 namespace dungeongenerator {
@@ -27,6 +28,7 @@ namespace dungeongenerator {
 		int y;
 		int type;
 		bool hasDoor = false;
+		VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
 		glm::mat4 modelMatrix;
 		std::vector<bool> walls;
 		std::vector<bool> doors;

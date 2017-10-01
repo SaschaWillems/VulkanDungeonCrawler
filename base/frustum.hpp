@@ -68,5 +68,48 @@ namespace vks
 			}
 			return true;
 		}
+
+		uint32_t halfPlaneTest(const glm::vec3 &p, const glm::vec3 &normal, float offset) const {
+			float dist = glm::dot(p, normal) + offset;
+			if (dist > 0.02) {
+				return 1;
+			}
+			else if (dist < -0.02) {
+				return 0;
+			}
+			return 2;
+		}
+
+		inline int vectorToIndex(const glm::vec3 &v) const {
+			int idx = 0;
+			if (v.z >= 0) idx |= 1;
+			if (v.y >= 0) idx |= 2;
+			if (v.x >= 0) idx |= 4;
+			return idx;
+		}
+
+		uint32_t checkBox(const glm::vec3 &origin, const glm::vec3 &halfDim) const {
+			static const glm::vec3 cornerOffsets[] = {
+				glm::vec3(-1.f,-1.f,-1.f), glm::vec3(-1.f,-1.f, 1.f), glm::vec3(-1.f, 1.f,-1.f), glm::vec3(-1.f, 1.f, 1.f),
+				glm::vec3( 1.f,-1.f,-1.f), glm::vec3( 1.f,-1.f, 1.f), glm::vec3( 1.f, 1.f,-1.f), glm::vec3( 1.f, 1.f, 1.f)
+			};
+			uint32_t ret = 1;
+			for (uint32_t i = 0; i<6; i++) {
+				glm::vec3 planeNormal = glm::vec3(planes[i]);
+				uint32_t idx = vectorToIndex(planeNormal);
+				glm::vec3 testPoint = origin + halfDim * cornerOffsets[idx];
+				if (halfPlaneTest(testPoint, planeNormal, planes[i].w) == 0) {
+					ret = 0;
+					break;
+				}
+				idx = vectorToIndex(-planeNormal);
+				testPoint = origin + halfDim * cornerOffsets[idx];
+				if (halfPlaneTest(testPoint, planeNormal, planes[i].w) == 0) {
+					ret |= 2;
+				}
+			}
+			return ret;
+		}
+
 	};
 }

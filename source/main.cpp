@@ -11,6 +11,7 @@
 #include <string.h>
 #include <assert.h>
 #include <vector>
+#include <omp.h>
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -22,6 +23,7 @@
 #include "VulkanBuffer.hpp"
 #include "VulkanTexture.hpp"
 #include "VulkanModel.hpp"
+#include "frustum.hpp"
 
 #include "generator/Dungeon.h"
 
@@ -36,10 +38,10 @@
 #define INDEX_OFFSET_CEILING 30
 
 struct TextureSet {
-	vks::Texture2DArray texture;
+	vks::Texture2DArray color;
 	void load(std::string name, vks::VulkanDevice *device, VkQueue queue) {
 		std::string folder("./../data/texturesets/");
-		texture.loadFromFile(folder + name + ".ktx", VK_FORMAT_R8G8B8A8_UNORM, device, queue);
+		color.loadFromFile(folder + name + ".ktx", VK_FORMAT_R8G8B8A8_UNORM, device, queue);
 	}
 };
 
@@ -47,6 +49,11 @@ class VulkanExample : public VulkanExampleBase
 {
 public:
 	bool topdown = false;
+
+	uint32_t cellsVisible;
+	uint32_t maxDrawDistance = 16;
+
+	vks::Frustum frustum;
 
 	vks::VertexLayout vertexLayout = vks::VertexLayout({
 		vks::VERTEX_COMPONENT_POSITION,
@@ -129,7 +136,7 @@ public:
 
 		srand(NULL);
 
-		dungeon = new dungeongenerator::Dungeon(32, 32);
+		dungeon = new dungeongenerator::Dungeon(64, 64);
 		dungeon->generateRooms();
 		dungeon->generateWalls();
 		dungeon->generateDoors();
@@ -145,7 +152,7 @@ public:
 		}
 		else {
 			camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-			camera.setTranslation(glm::vec3(startingRoom->centerX - dungeon->width * 0.5f, 0.5f, startingRoom->centerY - dungeon->height * 0.5f));
+			camera.setTranslation(glm::vec3(startingRoom->centerX, 0.5f, startingRoom->centerY));
 		}
 
 		camera.movementSpeed *= 4.0f;
@@ -167,7 +174,7 @@ public:
 		vkDestroyImage(device, deferredPass.depth.image, nullptr);
 		vkFreeMemory(device, deferredPass.depth.mem, nullptr);
 		vkDestroyFramebuffer(device, deferredPass.frameBuffer, nullptr);
- 		vkDestroyPipeline(device, pipelines.composition, nullptr);
+		vkDestroyPipeline(device, pipelines.composition, nullptr);
 		vkDestroyPipeline(device, pipelines.offscreen, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayouts.composition, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayouts.offscreen, nullptr);
@@ -213,33 +220,33 @@ public:
 			{ {  d, z, -d },{ 0.0f, -1.0f,  0.0f },{ 1.0f, 0.0f, 0.0f } },
 			{ { -d, z, -d },{ 0.0f, -1.0f,  0.0f },{ 0.0f, 0.0f, 0.0f } },
 			/* Wall (North) */
-			{ { -d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 1.0f, 1.0f } },
-			{ {  d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 1.0f, 1.0f } },
-			{ { -d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 0.0f, 1.0f } },
-			{ {  d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 1.0f, 1.0f } },
-			{ {  d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ { -d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ { -d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ {  d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ { -d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ {  d, z, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ {  d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ { -d, h, -d },{ 0.0f, 0.0f, 1.0f },{ 1.0f, 1.0f, 1.0f } },
 			/* Wall (South) */
-			{ { -d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ {  d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 1.0f, 1.0f } },
-			{ { -d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 1.0f, 1.0f } },
-			{ { -d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ {  d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 0.0f, 1.0f } },
-			{ {  d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ { -d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ {  d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ { -d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ { -d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ {  d, h,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ {  d, z,  d },{ 0.0f, 0.0f, -1.0f },{ 1.0f, 0.0f, 1.0f } },
 			/* Wall (West) */
-			{ { -d, h,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
-			{ { -d, z, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
-			{ { -d, h, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ { -d, h,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
-			{ { -d, z,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
-			{ { -d, z, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ { -d, h,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ { -d, z, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ { -d, h, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ { -d, h,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ { -d, z,  d },{ 1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ { -d, z, -d },{ 1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
 			/* Wall (East) */
-			{ {  d, h, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
-			{ {  d, z, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
-			{ {  d, h,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
-			{ {  d, z, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
-			{ {  d, z,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
-			{ {  d, h,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ {  d, h, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 1.0f, 1.0f } },
+			{ {  d, z, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ {  d, h,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
+			{ {  d, z, -d },{ -1.0f, 0.0f,  0.0f },{ 1.0f, 0.0f, 1.0f } },
+			{ {  d, z,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 0.0f, 1.0f } },
+			{ {  d, h,  d },{ -1.0f, 0.0f,  0.0f },{ 0.0f, 1.0f, 1.0f } },
 			/* Ceiling */
 			{ { -d, h, -d },{ 0.0f, -1.0f,  0.0f },{ 0.0f, 0.0f, 2.0f } },
 			{ { -d, h,  d },{ 0.0f, -1.0f,  0.0f },{ 0.0f, 1.0f, 2.0f } },
@@ -489,18 +496,80 @@ public:
 	}
 
 	/*
+		Pre-build secondary command buffers for each cell
+	*/
+	// TODO: Move into cell class
+	void generateCellCommandBuffers() {
+		for (uint32_t x = 0; x < dungeon->width; x++) {
+			for (uint32_t y = 0; y < dungeon->height; y++) {
+				dungeongenerator::Cell *cell = dungeon->cells[x][y];
+
+				glm::vec3 pos = glm::vec3(x * 1.0f - dungeon->width * 0.5f, 0.0, y * 1.0f - dungeon->height * 0.5f);
+
+				if (cell->type == dungeongenerator::Cell::cellTypeEmpty) {
+					continue;
+				}
+
+				// Build secondary command buffer
+				VkCommandBufferInheritanceInfo inheritanceInfo = vks::initializers::commandBufferInheritanceInfo();
+				inheritanceInfo.renderPass = deferredPass.renderPass;
+				inheritanceInfo.framebuffer = deferredPass.frameBuffer;
+
+				VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(cmdPool, VK_COMMAND_BUFFER_LEVEL_SECONDARY, 1);
+				vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, &cell->commandBuffer);
+
+				VkCommandBufferBeginInfo commandBufferBeginInfo = vks::initializers::commandBufferBeginInfo();
+				commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+				commandBufferBeginInfo.pInheritanceInfo = &inheritanceInfo;
+
+				vkBeginCommandBuffer(cell->commandBuffer, &commandBufferBeginInfo);
+
+				VkViewport viewport = vks::initializers::viewport((float)deferredPass.width, (float)deferredPass.height, 0.0f, 1.0f);
+				vkCmdSetViewport(cell->commandBuffer, 0, 1, &viewport);
+
+				VkRect2D scissor = vks::initializers::rect2D(deferredPass.width, deferredPass.height, 0, 0);
+				vkCmdSetScissor(cell->commandBuffer, 0, 1, &scissor);
+
+				vkCmdBindPipeline(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.offscreen);
+
+				VkDeviceSize offsets[1] = { 0 };
+
+				vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, 1, &descriptorSets.model, 0, NULL);
+
+				vkCmdBindVertexBuffers(cell->commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+				vkCmdBindIndexBuffer(cell->commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+				vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
+
+				if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
+					vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_FLOOR, 0, 0);
+					if (cell->walls[cell->dirNorth]) {
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_NORTH, 0, 0);
+					}
+					if (cell->walls[cell->dirSouth]) {
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_SOUTH, 0, 0);
+					}
+					if (cell->walls[cell->dirEast]) {
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_EAST, 0, 0);
+					}
+					if (cell->walls[cell->dirWest]) {
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_WEST, 0, 0);
+					}
+					if (!topdown) {
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_CEILING, 0, 0);
+					}
+				}
+
+				vkEndCommandBuffer(cell->commandBuffer);
+			}
+		}
+	}
+
+	/*
 		Build command buffer for rendering the scene to the offscreen frame buffer attachments
 	*/
 	void buildDeferredCommandBuffer()
 	{
-		if (deferredPass.commandBuffer == VK_NULL_HANDLE) {
-			deferredPass.commandBuffer = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
-		}
-
-		// Create a semaphore used to synchronize offscreen rendering and usage
-		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
-		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &deferredPass.semaphore));
-
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
 		// Clear values for all attachments written in the fragment sahder
@@ -520,54 +589,42 @@ public:
 
 		VK_CHECK_RESULT(vkBeginCommandBuffer(deferredPass.commandBuffer, &cmdBufInfo));
 
-		vkCmdBeginRenderPass(deferredPass.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-		VkViewport viewport = vks::initializers::viewport((float)deferredPass.width, (float)deferredPass.height, 0.0f, 1.0f);
-		vkCmdSetViewport(deferredPass.commandBuffer, 0, 1, &viewport);
-
-		VkRect2D scissor = vks::initializers::rect2D(deferredPass.width, deferredPass.height, 0, 0);
-		vkCmdSetScissor(deferredPass.commandBuffer, 0, 1, &scissor);
-
-		vkCmdBindPipeline(deferredPass.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.offscreen);
-
-		VkDeviceSize offsets[1] = { 0 };
-
-		// Background
-		vkCmdBindDescriptorSets(deferredPass.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, 1, &descriptorSets.model, 0, NULL);
-
-		vkCmdBindVertexBuffers(deferredPass.commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
-		vkCmdBindIndexBuffer(deferredPass.commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+		vkCmdBeginRenderPass(deferredPass.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
 
 		// Render dungeon cells
-		for (uint32_t x = 0; x < dungeon->width; x++) {
-			for (uint32_t y = 0; y < dungeon->height; y++) {
-				glm::vec3 pos = glm::vec3(x * 1.0f - dungeon->width * 0.5f, 0.0, y * 1.0f - dungeon->height * 0.5f);
-				dungeongenerator::Cell *cell = dungeon->cells[x][y];
-				vkCmdPushConstants(deferredPass.commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
-				if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
-					vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_FLOOR, 0, 0);
-					if (cell->walls[cell->dirNorth]) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_WALL_NORTH, 0, 0);
+		cellsVisible = 0;
+
+		frustum.update(camera.matrices.perspective * camera.matrices.view);
+
+		std::vector<VkCommandBuffer> commandBuffers;
+		#pragma omp parallel for
+		for (int32_t x = 0; x < dungeon->width; x++) {
+			for (int32_t y = 0; y < dungeon->height; y++) {
+				if ((dungeon->cells[x][y]->type != dungeongenerator::Cell::cellTypeEmpty)) {
+					glm::vec3 pos = glm::vec3(x - dungeon->width * 0.5f, 0.0, y - dungeon->height * 0.5f);
+					glm::vec3 cpos = camera.position * glm::vec3(-1.0f, 0.0f, -1.0f);
+					if (std::abs(glm::length(pos - cpos)) > maxDrawDistance) {
+						continue;
 					}
-					if (cell->walls[cell->dirSouth]) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_WALL_SOUTH, 0, 0);
+					dungeongenerator::Cell *cell = dungeon->cells[x][y];
+					uint32_t frustumCheck = frustum.checkBox(pos, glm::vec3(0.5f, 2.5f, 0.5f));
+					if (!(frustumCheck & 1)) {
+						continue;
 					}
-					if (cell->walls[cell->dirEast]) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_WALL_EAST, 0, 0);
-					}
-					if (cell->walls[cell->dirWest]) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_WALL_WEST, 0, 0);
-					}
-					if (!topdown) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_CEILING, 0, 0);
-					}
-				}
-				else {
-					if (topdown) {
-						vkCmdDrawIndexed(deferredPass.commandBuffer, 6, 1, INDEX_OFFSET_CEILING, 0, 0);
+
+					#pragma omp critical
+					{
+						if (cell->commandBuffer != VK_NULL_HANDLE) {
+							commandBuffers.push_back(cell->commandBuffer);
+							cellsVisible++;
+						}
 					}
 				}
 			}
+		}
+
+		if (commandBuffers.size() > 0) {
+			vkCmdExecuteCommands(deferredPass.commandBuffer, commandBuffers.size(), commandBuffers.data());
 		}
 
 		vkCmdEndRenderPass(deferredPass.commandBuffer);
@@ -719,7 +776,7 @@ public:
 		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.model));
 		writeDescriptorSets = {
 			vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vsOffscreen.descriptor),
-			vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textureSets.default.texture.descriptor),
+			vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textureSets.default.color.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 	}
@@ -953,8 +1010,17 @@ public:
 		setupDescriptorPool();
 		setupDescriptorSets();
 		buildVertexBuffers();
+
+		generateCellCommandBuffers();
+
 		buildCommandBuffers();
+
+		deferredPass.commandBuffer = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
+		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
+		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &deferredPass.semaphore));
+
 		buildDeferredCommandBuffer();
+
 		prepared = true;
 	}
 
@@ -968,6 +1034,7 @@ public:
 
 	virtual void viewChanged()
 	{
+		buildDeferredCommandBuffer();
 		updateUniformBufferDeferredMatrices();
 	}
 
@@ -977,6 +1044,7 @@ public:
 
 	virtual void getOverlayText(VulkanTextOverlay *textOverlay)
 	{
+		textOverlay->addText(std::to_string(cellsVisible), 5.0f, 85.0f, VulkanTextOverlay::alignLeft);
 	}
 };
 
