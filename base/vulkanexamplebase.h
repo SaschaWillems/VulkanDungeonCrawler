@@ -328,6 +328,7 @@ public:
 	// Called if a key is pressed
 	/** @brief (Virtual) Called after a key was pressed, can be used to do custom key handling */
 	virtual void keyPressed(uint32_t);
+	virtual void mouseMoved(double x, double y);
 	// Called when the window has been resized
 	// Can be overriden in derived class to recreate or rebuild resources attached to the frame buffer / swapchain
 	virtual void windowResized();

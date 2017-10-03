@@ -26,6 +26,7 @@
 #include "frustum.hpp"
 
 #include "generator/Dungeon.h"
+#include "Player.h"
 
 #define ENABLE_VALIDATION false
 
@@ -54,6 +55,8 @@ public:
 	uint32_t maxDrawDistance = 16;
 
 	vks::Frustum frustum;
+	
+	Player player;
 
 	vks::VertexLayout vertexLayout = vks::VertexLayout({
 		vks::VERTEX_COMPONENT_POSITION,
@@ -143,19 +146,10 @@ public:
 
 		dungeongenerator::BspPartition* startingRoom = dungeon->getRandomRoom();
 
-		camera.type = Camera::CameraType::firstperson;
-		camera.setPerspective(60.0f, (float)width / (float)height, 0.1f, 1024.0f);
-
-		if (topdown) {
-			camera.setRotation(glm::vec3(-25.0f, 0.0f, 0.0f));
-			camera.setTranslation(glm::vec3(0.0f, 10.0f, 0.0f));
-		}
-		else {
-			camera.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-			camera.setTranslation(glm::vec3(-(startingRoom->centerX - dungeon->width * 0.5f), 0.5f, -(startingRoom->centerY - dungeon->width * 0.5f)));
-		}
-
-		camera.movementSpeed *= 4.0f;
+		player.setDungeon(dungeon);
+		player.setPerspective(60.0f, (float)width / (float)height, 0.1f, 1024.0f);
+		player.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
+		player.setPosition(glm::vec3(startingRoom->centerX, 0.5f, startingRoom->centerY));
 	}
 
 	~VulkanExample()
@@ -379,7 +373,7 @@ public:
 
 		// Color attachments
 		// (World space) Positions
-		createAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &deferredPass.position);
+		createAttachment(VK_FORMAT_R32G32B32A32_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &deferredPass.position);
 		// (World space) Normals
 		createAttachment(VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, &deferredPass.normal);
 		// Albedo (color)
@@ -504,7 +498,8 @@ public:
 			for (uint32_t y = 0; y < dungeon->height; y++) {
 				dungeongenerator::Cell *cell = dungeon->cells[x][y];
 
-				glm::vec3 pos = glm::vec3(x * 1.0f - dungeon->width * 0.5f, 0.0, y * 1.0f - dungeon->height * 0.5f);
+//				glm::vec3 pos = glm::vec3(x * 1.0f - dungeon->width * 0.5f, 0.0, y * 1.0f - dungeon->height * 0.5f);
+				glm::vec3 pos = glm::vec3((float)x, 0.0f, (float)y);
 
 				if (cell->type == dungeongenerator::Cell::cellTypeEmpty) {
 					continue;
@@ -539,9 +534,9 @@ public:
 				vkCmdBindVertexBuffers(cell->commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
 				vkCmdBindIndexBuffer(cell->commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-				vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
 
 				if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
+					vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
 					vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_FLOOR, 0, 0);
 					if (cell->walls[cell->dirNorth]) {
 						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_NORTH, 0, 0);
@@ -594,15 +589,15 @@ public:
 		// Render dungeon cells
 		cellsVisible = 0;
 
-		frustum.update(camera.matrices.perspective * camera.matrices.view);
+		frustum.update(player.matrices.projection * player.matrices.view);
 
 		std::vector<VkCommandBuffer> commandBuffers;
 		#pragma omp parallel for
 		for (int32_t x = 0; x < dungeon->width; x++) {
 			for (int32_t y = 0; y < dungeon->height; y++) {
 				if ((dungeon->cells[x][y]->type != dungeongenerator::Cell::cellTypeEmpty)) {
-					glm::vec3 pos = glm::vec3(x - dungeon->width * 0.5f, 0.0, y - dungeon->height * 0.5f);
-					glm::vec3 cpos = camera.position * glm::vec3(-1.0f, 0.0f, -1.0f);
+					glm::vec3 pos = glm::vec3((float)x, 0.0f, (float)y);
+					glm::vec3 cpos = player.position;
 					if (std::abs(glm::length(pos - cpos)) > maxDrawDistance) {
 						continue;
 					}
@@ -911,8 +906,8 @@ public:
 
 	void updateUniformBufferDeferredMatrices()
 	{
-		uboOffscreenVS.projection = camera.matrices.perspective;
-		uboOffscreenVS.view = camera.matrices.view;
+		uboOffscreenVS.projection = player.matrices.projection;
+		uboOffscreenVS.view = player.matrices.view;
 		uboOffscreenVS.model = glm::mat4(1.0f);
 
 		memcpy(uniformBuffers.vsOffscreen.mapped, &uboOffscreenVS, sizeof(uboOffscreenVS));
@@ -941,13 +936,15 @@ public:
 		uboFragmentLights.lights[4].position = glm::vec4(0.0f, 0.5f, 0.0f, 0.0f);
 		uboFragmentLights.lights[4].color = glm::vec3(0.0f, 1.0f, 0.2f);
 		uboFragmentLights.lights[4].radius = 5.0f;
-		// Yellow
-		uboFragmentLights.lights[5].position = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-		uboFragmentLights.lights[5].color = glm::vec3(1.0f, 0.7f, 0.3f);
-		uboFragmentLights.lights[5].color = glm::vec3(1.0f);
-		uboFragmentLights.lights[5].radius = 10.0f;
-		uboFragmentLights.lights[5].position = glm::vec4(camera.position, 0.0f) * -1.0f;
 
+		// Player
+		uboFragmentLights.lights[5].color = glm::vec3(2.0f) + sin(glm::radians(360.0f * timer)) * 0.25f;
+		uboFragmentLights.lights[5].radius = 2.0f;
+		uboFragmentLights.lights[5].position = glm::vec4(player.position, 1.0f);
+		uboFragmentLights.lights[5].position.x += sin(glm::radians(360.0f * timer * 2.0f)) * 0.05f;
+		uboFragmentLights.lights[5].position.z -= cos(glm::radians(360.0f * timer * 2.0f)) * 0.05f;
+
+		//  Animate
 		uboFragmentLights.lights[0].position.x = sin(glm::radians(360.0f * timer)) * 5.0f;
 		uboFragmentLights.lights[0].position.z = cos(glm::radians(360.0f * timer)) * 5.0f;
 
@@ -960,11 +957,9 @@ public:
 		uboFragmentLights.lights[4].position.x = 0.0f + sin(glm::radians(360.0f * timer + 90.0f)) * 5.0f;
 		uboFragmentLights.lights[4].position.z = 0.0f - cos(glm::radians(360.0f * timer + 45.0f)) * 5.0f;
 
-		//uboFragmentLights.lights[5].position.x = 0.0f + sin(glm::radians(-360.0f * timer + 135.0f)) * 10.0f;
-		//uboFragmentLights.lights[5].position.z = 0.0f - cos(glm::radians(-360.0f * timer - 45.0f)) * 10.0f;
 
 		// Current view position
-		uboFragmentLights.viewPos = glm::vec4(camera.position, 0.0f) * glm::vec4(-1.0f, 1.0f, -1.0f, 1.0f);
+		uboFragmentLights.viewPos = glm::vec4(player.position, 0.0f);
 
 		memcpy(uniformBuffers.fsLights.mapped, &uboFragmentLights, sizeof(uboFragmentLights));
 	}
@@ -972,30 +967,15 @@ public:
 	void draw()
 	{
 		VulkanExampleBase::prepareFrame();
-
-		// Offscreen rendering
-
-		// Wait for swap chain presentation to finish
 		submitInfo.pWaitSemaphores = &semaphores.presentComplete;
-		// Signal ready with offscreen semaphore
 		submitInfo.pSignalSemaphores = &deferredPass.semaphore;
-
-		// Submit work
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &deferredPass.commandBuffer;
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
-
-		// Scene rendering
-
-		// Wait for offscreen semaphore
 		submitInfo.pWaitSemaphores = &deferredPass.semaphore;
-		// Signal ready with render complete semaphpre
 		submitInfo.pSignalSemaphores = &semaphores.renderComplete;
-
-		// Submit work
 		submitInfo.pCommandBuffers = &drawCmdBuffers[currentBuffer];
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
-
 		VulkanExampleBase::submitFrame();
 	}
 
@@ -1029,6 +1009,17 @@ public:
 		if (!prepared)
 			return;
 		draw();
+
+#if defined(_WIN32)
+		player.freeLook = false;
+		if (GetKeyState(VK_CONTROL) & 0x800) {
+			player.freeLook = true;
+		}
+#endif
+
+		if (player.update(frameTimer)) {
+			viewChanged();
+		}
 		updateUniformBufferDeferredLights();
 	}
 
@@ -1040,6 +1031,46 @@ public:
 
 	virtual void keyPressed(uint32_t keyCode)
 	{
+		bool animate = false;
+		bool updateReq = false;
+		switch (keyCode) {
+			case KEY_Q:
+				player.rotate(-90.0f, animate);
+				updateReq = true;
+				break;
+			case KEY_E:
+				player.rotate(90.0f, animate);
+				updateReq = true;
+				break;
+			case KEY_W: 
+				player.move(glm::vec3(0.0f, 0.0f, 1.0f), animate);
+				updateReq = true;
+				break;
+			case KEY_S:
+				player.move(glm::vec3(0.0f, 0.0f, -1.0f), animate);
+				updateReq = true;
+				break;
+			case KEY_A:
+				player.move(glm::vec3(-1.0f, 0.0f, 0.0f), animate);
+				updateReq = true;
+				break;
+			case KEY_D:
+				player.move(glm::vec3(1.0f, 0.0f, 0.0f), animate);
+				updateReq = true;
+				break;
+		}
+		if (updateReq) {
+			viewChanged();
+			updateTextOverlay();
+		}
+	}
+
+	virtual void mouseMoved(double x, double y)
+	{
+		if (player.freeLook) {
+			player.setFreeLookDelta(glm::vec2((x - (width / 2.0f)) / width, -((y - (height / 2.0f)) / height)));
+			updateTextOverlay();
+		}
 	}
 
 	virtual void getOverlayText(VulkanTextOverlay *textOverlay)

@@ -48,13 +48,15 @@ void main()
 		vec3 V = ubo.viewPos.xyz - fragPos;
 		V = normalize(V);
 		
-		if (dist < ubo.lights[i].radius)
+		//if (dist < ubo.lights[i].radius)
 		{
 			// Light to fragment
 			L = normalize(L);
 
 			// Attenuation
-			float atten = ubo.lights[i].radius / (pow(dist, 2.0) + 1.0);
+			float atten = clamp(ubo.lights[i].radius / (pow(dist, 2.0) + 1.0), 0.0, 1.0);
+
+			//float atten = ubo.lights[i].radius / (1.0f * (1.0 / (1.0 + (0.25 * dist * dist))));
 
 			// Diffuse part
 			vec3 N = normalize(normal);

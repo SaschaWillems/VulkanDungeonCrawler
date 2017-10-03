@@ -1084,6 +1084,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			break;
 		}
 
+		/*
 		if (camera.firstperson)
 		{
 			switch (wParam)
@@ -1101,7 +1102,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 				camera.keys.right = true;
 				break;
 			}
-		}
+		}*/
 
 		keyPressed((uint32_t)wParam);
 		break;
@@ -1140,37 +1141,33 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 		break;
 	}
 	case WM_MOUSEMOVE:
+	{
+		int32_t posx = LOWORD(lParam);
+		int32_t posy = HIWORD(lParam);
 		if (wParam & MK_RBUTTON)
 		{
-			int32_t posx = LOWORD(lParam);
-			int32_t posy = HIWORD(lParam);
 			zoom += (mousePos.y - (float)posy) * .005f * zoomSpeed;
 			camera.translate(glm::vec3(-0.0f, 0.0f, (mousePos.y - (float)posy) * .005f * zoomSpeed));
-			mousePos = glm::vec2((float)posx, (float)posy);
 			viewUpdated = true;
 		}
 		if (wParam & MK_LBUTTON)
 		{
-			int32_t posx = LOWORD(lParam);
-			int32_t posy = HIWORD(lParam);
 			rotation.x += (mousePos.y - (float)posy) * 1.25f * rotationSpeed;
 			rotation.y -= (mousePos.x - (float)posx) * 1.25f * rotationSpeed;
 			camera.rotate(glm::vec3((mousePos.y - (float)posy) * camera.rotationSpeed, -(mousePos.x - (float)posx) * camera.rotationSpeed, 0.0f));
-			mousePos = glm::vec2((float)posx, (float)posy);
 			viewUpdated = true;
 		}
 		if (wParam & MK_MBUTTON)
 		{
-			int32_t posx = LOWORD(lParam);
-			int32_t posy = HIWORD(lParam);
 			cameraPos.x -= (mousePos.x - (float)posx) * 0.01f;
 			cameraPos.y -= (mousePos.y - (float)posy) * 0.01f;
 			camera.translate(glm::vec3(-(mousePos.x - (float)posx) * 0.01f, -(mousePos.y - (float)posy) * 0.01f, 0.0f));
 			viewUpdated = true;
-			mousePos.x = (float)posx;
-			mousePos.y = (float)posy;
 		}
+		mousePos = glm::vec2((float)posx, (float)posy);
+		mouseMoved((float)posx, (float)posy);
 		break;
+	}
 	case WM_SIZE:
 		if ((prepared) && (wParam != SIZE_MINIMIZED))
 		{
@@ -1898,6 +1895,8 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 void VulkanExampleBase::viewChanged() {}
 
 void VulkanExampleBase::keyPressed(uint32_t) {}
+
+void VulkanExampleBase::mouseMoved(double x, double y) {}
 
 void VulkanExampleBase::buildCommandBuffers() {}
 

@@ -19,6 +19,7 @@
 #define KEY_A 0x41
 #define KEY_S 0x53
 #define KEY_D 0x44
+#define KEY_E 0x45
 #define KEY_P 0x50
 #define KEY_SPACE 0x20
 #define KEY_KPADD 0x6B
@@ -28,6 +29,7 @@
 #define KEY_L 0x4C
 #define KEY_N 0x4E
 #define KEY_O 0x4F
+#define KEY_Q 0x51
 #define KEY_T 0x54
 #elif defined(__ANDROID__)
 // Dummy key codes 
