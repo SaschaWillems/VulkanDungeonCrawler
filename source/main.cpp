@@ -40,9 +40,21 @@
 
 struct TextureSet {
 	vks::Texture2DArray color;
+	VkDescriptorSet descriptorSet;
+
 	void load(std::string name, vks::VulkanDevice *device, VkQueue queue) {
 		std::string folder("./../data/texturesets/");
 		color.loadFromFile(folder + name + ".ktx", VK_FORMAT_R8G8B8A8_UNORM, device, queue);
+	}
+
+	void createDescriptorSet(VkDevice device, VkDescriptorPool pool, VkDescriptorSetLayout setLayout) {
+		VkDescriptorSetAllocateInfo allocInfo(vks::initializers::descriptorSetAllocateInfo(pool, &setLayout, 1));
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
+		std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 0, &color.descriptor),
+			//vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &normals.descriptor),
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 	}
 };
 
@@ -111,6 +123,11 @@ public:
 
 	VkDescriptorSet descriptorSet;
 	VkDescriptorSetLayout descriptorSetLayout;
+
+	struct {
+		VkDescriptorSetLayout textureSet;
+		VkDescriptorSetLayout uniformBuffers;
+	} descriptorSetLayouts;
 
 	// Framebuffer for offscreen rendering
 	struct FrameBufferAttachment {
@@ -529,11 +546,13 @@ public:
 
 				VkDeviceSize offsets[1] = { 0 };
 
-				vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, 1, &descriptorSets.model, 0, NULL);
-
+				std::vector<VkDescriptorSet> bindDescSets = {
+					descriptorSets.model,
+					textureSets.default.descriptorSet,
+				};
+				vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, static_cast<uint32_t>(bindDescSets.size()), bindDescSets.data(), 0, nullptr);
 				vkCmdBindVertexBuffers(cell->commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
 				vkCmdBindIndexBuffer(cell->commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
 
 				if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
 					vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
@@ -685,95 +704,113 @@ public:
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 9)
 		};
 		VkDescriptorPoolCreateInfo descriptorPoolInfo =
-			vks::initializers::descriptorPoolCreateInfo(static_cast<uint32_t>(poolSizes.size()), poolSizes.data(), 3);
+			vks::initializers::descriptorPoolCreateInfo(static_cast<uint32_t>(poolSizes.size()), poolSizes.data(), 128);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 	}
 
 	void setupDescriptorSetLayout()
 	{
-		// Scene composition
-		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
-			// Binding 0 : Vertex shader uniform buffer
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
-			// Binding 1 : Position texture target / Scene colormap
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
-			// Binding 2 : Normals texture target
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
-			// Binding 3 : Albedo texture target
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
-			// Binding 4 : Fragment shader uniform buffer
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
-		};
-		VkDescriptorSetLayoutCreateInfo descriptorLayout =
-			vks::initializers::descriptorSetLayoutCreateInfo(
-				setLayoutBindings.data(),
-				static_cast<uint32_t>(setLayoutBindings.size()));
-		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout));
-		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo =
-			vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &pipelineLayouts.composition));
+		/*
+			Scene composition
+		*/
+		{
+			std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 1),
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
+				vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
+			};
+			VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+			VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout));
+			VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
+			VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayouts.composition));
+		}
+		/*
+			Offscreen (scene) rendering pipeline layout
+		*/
+		{
+			// Uniform buffers
+			{
+				std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+					vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
+				};
+				VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+				VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayouts.uniformBuffers));
+			}
 
-		// Offscreen (scene) rendering pipeline layout
-		std::vector<VkPushConstantRange> pushConstantRanges = {
-			vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::vec3), 0),
-		};
-		pPipelineLayoutCreateInfo.pushConstantRangeCount = 1;
-		pPipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
-		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &pipelineLayouts.offscreen));
+			// Texture set
+			{
+				std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+					vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 0),
+				};
+				VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+				VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayouts.textureSet));
+			}
+
+			std::array<VkDescriptorSetLayout, 2> setLayouts = { descriptorSetLayouts.uniformBuffers, descriptorSetLayouts.textureSet };
+			VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(setLayouts.data(), static_cast<uint32_t>(setLayouts.size()));
+
+			std::vector<VkPushConstantRange> pushConstantRanges = {
+				vks::initializers::pushConstantRange(VK_SHADER_STAGE_VERTEX_BIT, sizeof(glm::vec3), 0),
+			};
+
+			pipelineLayoutCreateInfo.pushConstantRangeCount = 1;
+			pipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
+
+			VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayouts.offscreen));
+		}
 	}
 
 	void setupDescriptorSets()
 	{
-		std::vector<VkWriteDescriptorSet> writeDescriptorSets;
-
-		// Textured quad descriptor set
-		VkDescriptorSetAllocateInfo allocInfo =
-			vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayout, 1);
-
-		/*
-			Scene composition
-		*/
-
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
-
-		// Image descriptors for the offscreen color attachments
-		VkDescriptorImageInfo texDescriptorPosition =
-			vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.position.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-		VkDescriptorImageInfo texDescriptorNormal =
-			vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.normal.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-		VkDescriptorImageInfo texDescriptorAlbedo =
-			vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.albedo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-		writeDescriptorSets = {
-			// Binding 0 : Vertex shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vsFullScreen.descriptor),
-			// Binding 1 : Position texture target
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorPosition),
-			// Binding 2 : Normals texture target
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
-			// Binding 3 : Albedo texture target
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorAlbedo),
-			// Binding 4 : Fragment shader uniform buffer
-			vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.fsLights.descriptor),
-		};
-		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
-
-		/*
-			Scene rendering
-		*/
 		std::vector<VkDescriptorPoolSize> poolSizes = {
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4),
 			// TODO: Number of combined image samplers from no. of loaded texture presets
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64),
 		};
-		VkDescriptorPoolCreateInfo descriptorPoolInfo =
-			vks::initializers::descriptorPoolCreateInfo(poolSizes, 2);
+		VkDescriptorPoolCreateInfo descriptorPoolInfo = vks::initializers::descriptorPoolCreateInfo(poolSizes, 128);
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
-		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.model));
-		writeDescriptorSets = {
-			vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vsOffscreen.descriptor),
-			vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &textureSets.default.color.descriptor),
-		};
-		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+
+		/*
+			G-Buffer composition
+		*/
+		// Image descriptors for the offscreen color attachments
+		{
+			VkDescriptorSetAllocateInfo allocInfo =
+				vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayout, 1);
+			VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet));
+			VkDescriptorImageInfo texDescriptorPosition =
+				vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.position.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			VkDescriptorImageInfo texDescriptorNormal =
+				vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.normal.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			VkDescriptorImageInfo texDescriptorAlbedo =
+				vks::initializers::descriptorImageInfo(deferredPass.sampler, deferredPass.albedo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+				vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vsFullScreen.descriptor),
+				vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, &texDescriptorPosition),
+				vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &texDescriptorNormal),
+				vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, &texDescriptorAlbedo),
+				vks::initializers::writeDescriptorSet(descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.fsLights.descriptor),
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+		}
+
+		/*
+			Scene rendering
+		*/
+		{
+			VkDescriptorSetAllocateInfo allocInfo =
+				vks::initializers::descriptorSetAllocateInfo(descriptorPool, &descriptorSetLayouts.uniformBuffers, 1);
+			VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &descriptorSets.model));
+			// Uniform buffers
+			std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+				vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &uniformBuffers.vsOffscreen.descriptor),
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+			// Texture sets
+			textureSets.default.createDescriptorSet(device, descriptorPool, descriptorSetLayouts.textureSet);
+		}
 	}
 
 	void preparePipelines()
