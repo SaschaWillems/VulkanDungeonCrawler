@@ -141,27 +141,31 @@ bool Player::updateFreeLook(float timeFactor) {
 	return viewChange;
 }
 
-void Player::updateMovement(float timeFactor) {
+bool Player::updateMovement(float timeFactor) {
 	glm::vec3 distVec = glm::normalize(position - targetPosition);
 	double distance = glm::distance(position, targetPosition);
 	if (distance > 0.0f) {
-		position -= glm::normalize(distVec) * timeFactor;
+		position -= glm::normalize(distVec) * timeFactor * movementSpeed;
 		if (distance <= timeFactor) {
 			position = targetPosition;
 		};
+		return true;
 	};
+	return false;
 }
 
-void Player::updateRotation(float timeFactor) {
+bool Player::updateRotation(float timeFactor) {
 	if (rotationDir != 0.0f) {
-		float rotationFactor = rotationDir * timeFactor * 65.0f;
+		float rotationFactor = rotationDir * timeFactor * rotationSpeed * 100.0f;
 		rotation.y += rotationFactor;
 		animRotation -= abs(rotationFactor);
 		if (animRotation <= 0.0f) {
 			rotation.y = targetRotation;
 			rotationDir = 0.0f;
 		}
+		return true;
 	}
+	return false;
 }
 
 void Player::updateViewMatrix() {
@@ -179,8 +183,8 @@ void Player::updateViewMatrix() {
 bool Player::update(float timeFactor) {
 	bool viewChange = false;
 	viewChange |= updateFreeLook(timeFactor);
-	updateMovement(timeFactor);
-	updateRotation(timeFactor);
+	viewChange |= updateMovement(timeFactor);
+	viewChange |= updateRotation(timeFactor);
 	if (viewChange) {
 		updateViewMatrix();
 	}

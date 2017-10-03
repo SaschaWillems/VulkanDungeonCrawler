@@ -17,6 +17,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/matrix_access.hpp>
 
 #include <vulkan/vulkan.h>
 #include "vulkanexamplebase.h"
@@ -62,6 +63,7 @@ class VulkanExample : public VulkanExampleBase
 {
 public:
 	bool topdown = false;
+	bool animate = true;
 
 	uint32_t cellsVisible;
 	uint32_t maxDrawDistance = 16;
@@ -978,6 +980,10 @@ public:
 		uboFragmentLights.lights[5].color = glm::vec3(2.0f) + sin(glm::radians(360.0f * timer)) * 0.25f;
 		uboFragmentLights.lights[5].radius = 2.0f;
 		uboFragmentLights.lights[5].position = glm::vec4(player.position, 1.0f);
+
+		glm::vec3 forwardVec = glm::column(player.matrices.view, 2);
+		uboFragmentLights.lights[5].position = glm::vec4(player.position + forwardVec * 0.25f, 1.0f);
+
 		uboFragmentLights.lights[5].position.x += sin(glm::radians(360.0f * timer * 2.0f)) * 0.05f;
 		uboFragmentLights.lights[5].position.z -= cos(glm::radians(360.0f * timer * 2.0f)) * 0.05f;
 
@@ -1068,7 +1074,6 @@ public:
 
 	virtual void keyPressed(uint32_t keyCode)
 	{
-		bool animate = false;
 		bool updateReq = false;
 		switch (keyCode) {
 			case KEY_Q:

@@ -24,8 +24,8 @@ private:
 	float animRotation;
 	float targetRotation;
 	bool updateFreeLook(float timeFactor);
-	void updateMovement(float timeFactor);
-	void updateRotation(float timeFactor);
+	bool updateMovement(float timeFactor);
+	bool updateRotation(float timeFactor);
 	void updateViewMatrix();
 public:
 	struct {
@@ -34,6 +34,8 @@ public:
 	} matrices;
 
 	float fov, znear, zfar;
+	float rotationSpeed = 1.75f;
+	float movementSpeed = 2.0f;
 
 	glm::vec3 position;
 	glm::vec3 rotation;
