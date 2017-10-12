@@ -29,6 +29,7 @@ namespace dungeongenerator {
 		int type;
 		bool hasDoor = false;
 		VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+		bool uncovered = false;
 		glm::mat4 modelMatrix;
 		std::vector<bool> walls;
 		std::vector<bool> doors;

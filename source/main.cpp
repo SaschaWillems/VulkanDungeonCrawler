@@ -39,6 +39,16 @@
 #define INDEX_OFFSET_WALL_EAST 24
 #define INDEX_OFFSET_CEILING 30
 
+struct Globals {
+	vks::VulkanDevice *device;
+} globals;
+
+struct Vertex {
+	float position[3];
+	float normal[3];
+	float uv[3];
+};
+
 struct TextureSet {
 	vks::Texture2DArray color;
 	VkDescriptorSet descriptorSet;
@@ -56,6 +66,123 @@ struct TextureSet {
 			//vks::initializers::writeDescriptorSet(descriptorSets.model, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2, &normals.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
+	}
+};
+
+struct DungeonMap {
+	VkCommandBuffer commandBuffer;
+	bool update = true;
+	vks::Buffer uniformBuffer;
+	vks::Buffer vertexBuffer;
+	vks::Buffer indexBuffer;
+	uint32_t indexCount = 0;
+	struct Uniforms {
+		glm::mat4 projection;
+		glm::mat4 model;
+		glm::mat4 view;
+	} uniforms;
+	VkPipelineLayout pipelineLayout;
+	VkPipeline pipeline;
+	VkDescriptorSetLayout descriptorSetLayout;
+	VkDescriptorSet descriptorSet;
+	dungeongenerator::Dungeon *dungeon;
+	Player *player;
+	float rotation = 0.0f;
+	float aspectRatio = 1.0f;
+	bool display = false;
+
+	void updateUniforms() {
+		const float scale = 32.0f;
+		uniforms.projection = glm::ortho(-scale, scale, -scale * aspectRatio, scale * aspectRatio, -1.0f, 1.0f);
+		uniforms.model = glm::mat4(1.0f);
+		uniforms.model = glm::rotate(uniforms.model, glm::radians(-rotation), glm::vec3(0.0f, 0.0f, 1.0f));
+		uniforms.model = glm::translate(uniforms.model, glm::vec3(-player->position.x, -player->position.z, 0.0f));
+		memcpy(uniformBuffer.mapped, &uniforms, sizeof(uniforms));
+	}
+
+	void updateBuffers() {
+		// Vertex buffer (only once)
+		std::vector<Vertex> vertices;
+		if ((vertexBuffer.buffer == VK_NULL_HANDLE)) {
+			const float d = 0.45f;
+			for (uint32_t x = 0; x < dungeon->width; x++) {
+				for (uint32_t y = 0; y < dungeon->width; y++) {
+					vertices.push_back({ { -d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 1.0f } });
+					vertices.push_back({ {  d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } });
+					vertices.push_back({ { -d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } });
+					vertices.push_back({ {  d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } });
+					vertices.push_back({ {  d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 1.0f } });
+					vertices.push_back({ { -d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } });
+				}
+			}
+			VkDeviceSize vertexBufferSize = vertices.size() * sizeof(Vertex);
+			VK_CHECK_RESULT(globals.device->createBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &vertexBuffer, vertexBufferSize, vertices.data()));
+			vertexBuffer.map();
+			vertexBuffer.flush();
+			vertexBuffer.unmap();
+		}
+
+		// Index buffer
+		{
+			if (indexBuffer.buffer != VK_NULL_HANDLE) {
+				indexBuffer.unmap();
+				indexBuffer.destroy();
+			}
+			uint32_t idx = 0;
+			std::vector<uint32_t> indices;
+			for (uint32_t x = 0; x < dungeon->width; x++) {
+				for (uint32_t y = 0; y < dungeon->width; y++) {
+					if (dungeon->getCell(x, y)->uncovered) {
+						for (uint32_t i = 0; i < 6; i++) {
+							indices.push_back(idx + i);
+						}
+					}
+					idx += 6;
+				}
+			}
+			VkDeviceSize indexBufferSize = indices.size() * sizeof(uint32_t);
+			if (indexBufferSize > 0) {
+				VK_CHECK_RESULT(globals.device->createBuffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &indexBuffer, indexBufferSize, indices.data()));
+				indexCount = static_cast<uint32_t>(indices.size());
+				indexBuffer.map();
+				indexBuffer.flush();
+				indexBuffer.unmap();
+			}
+		}
+	}
+
+	void updateCommandBuffer(VkRenderPass renderpass, glm::vec2 screensize) {
+		VkCommandBufferInheritanceInfo inheritanceInfo = vks::initializers::commandBufferInheritanceInfo();
+		inheritanceInfo.renderPass = renderpass;
+		inheritanceInfo.framebuffer = VK_NULL_HANDLE;
+
+		VkCommandBufferBeginInfo commandBufferBeginInfo = vks::initializers::commandBufferBeginInfo();
+		commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+		commandBufferBeginInfo.pInheritanceInfo = &inheritanceInfo;
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &commandBufferBeginInfo));
+
+		VkViewport viewport = vks::initializers::viewport(screensize.x, screensize.y, 0.0f, 1.0f);
+		vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+		VkRect2D scissor = vks::initializers::rect2D(screensize.x, screensize.y, 0, 0);
+		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+
+		VkDeviceSize offsets[1] = { 0 };
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+
+		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+		vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+		if (indexCount > 0) {
+			vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+			vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+			vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+		}
+
+		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
+
+		update = false;
 	}
 };
 
@@ -149,7 +276,11 @@ public:
 		VkSemaphore semaphore;
 	} deferredPass;
 
+	VkCommandBuffer compositionCB = VK_NULL_HANDLE;
+	VkCommandBuffer renderCB = VK_NULL_HANDLE;
+
 	dungeongenerator::Dungeon *dungeon;
+	DungeonMap dungeonMap;
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
@@ -169,6 +300,27 @@ public:
 		player.setPerspective(60.0f, (float)width / (float)height, 0.1f, 1024.0f);
 		player.setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
 		player.setPosition(glm::vec3(startingRoom->centerX, 0.5f, startingRoom->centerY));
+
+		// White
+		uboFragmentLights.lights[0].position = glm::vec4(player.position, 0.0f) + glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+		uboFragmentLights.lights[0].color = glm::vec3(1.5f);
+		uboFragmentLights.lights[0].radius = 15.0f * 0.25f;
+		// Red
+		uboFragmentLights.lights[1].position = glm::vec4(player.position, 0.0f) + glm::vec4(-2.0f, 0.0f, 0.0f, 0.0f);
+		uboFragmentLights.lights[1].color = glm::vec3(1.0f, 0.0f, 0.0f);
+		uboFragmentLights.lights[1].radius = 15.0f;
+		// Blue
+		uboFragmentLights.lights[2].position = glm::vec4(player.position, 0.0f) + glm::vec4(2.0f, 1.0f, 0.0f, 0.0f);
+		uboFragmentLights.lights[2].color = glm::vec3(0.0f, 0.0f, 2.5f);
+		uboFragmentLights.lights[2].radius = 5.0f;
+		// Yellow
+		uboFragmentLights.lights[3].position = glm::vec4(player.position, 0.0f) + glm::vec4(0.0f, 0.9f, 0.5f, 0.0f);
+		uboFragmentLights.lights[3].color = glm::vec3(1.0f, 1.0f, 0.0f);
+		uboFragmentLights.lights[3].radius = 2.0f;
+		// Green
+		uboFragmentLights.lights[4].position = glm::vec4(player.position, 0.0f) + glm::vec4(0.0f, 0.5f, 0.0f, 0.0f);
+		uboFragmentLights.lights[4].color = glm::vec3(0.0f, 1.0f, 0.2f);
+		uboFragmentLights.lights[4].radius = 5.0f;
 	}
 
 	~VulkanExample()
@@ -213,11 +365,6 @@ public:
 	*/
 	void buildVertexBuffers()
 	{
-		struct Vertex {
-			float position[3];
-			float normal[3];
-			float uv[3];
-		};
 		const float d = 0.5f;
 		const float h = -1.0f;
 		const float z = 0.0f;
@@ -524,59 +671,71 @@ public:
 					continue;
 				}
 
-				// Build secondary command buffer
-				VkCommandBufferInheritanceInfo inheritanceInfo = vks::initializers::commandBufferInheritanceInfo();
-				inheritanceInfo.renderPass = deferredPass.renderPass;
-				inheritanceInfo.framebuffer = deferredPass.frameBuffer;
+				/*
+					Secondary command buffer for scene display
+				*/
+				{
+					VkCommandBufferInheritanceInfo inheritanceInfo = vks::initializers::commandBufferInheritanceInfo();
+					inheritanceInfo.renderPass = deferredPass.renderPass;
+					inheritanceInfo.framebuffer = deferredPass.frameBuffer;
 
-				VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(cmdPool, VK_COMMAND_BUFFER_LEVEL_SECONDARY, 1);
-				vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, &cell->commandBuffer);
+					VkCommandBufferAllocateInfo cmdBufAllocateInfo = vks::initializers::commandBufferAllocateInfo(cmdPool, VK_COMMAND_BUFFER_LEVEL_SECONDARY, 1);
+					vkAllocateCommandBuffers(device, &cmdBufAllocateInfo, &cell->commandBuffer);
 
-				VkCommandBufferBeginInfo commandBufferBeginInfo = vks::initializers::commandBufferBeginInfo();
-				commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
-				commandBufferBeginInfo.pInheritanceInfo = &inheritanceInfo;
+					VkCommandBufferBeginInfo commandBufferBeginInfo = vks::initializers::commandBufferBeginInfo();
+					commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+					commandBufferBeginInfo.pInheritanceInfo = &inheritanceInfo;
 
-				vkBeginCommandBuffer(cell->commandBuffer, &commandBufferBeginInfo);
+					vkBeginCommandBuffer(cell->commandBuffer, &commandBufferBeginInfo);
 
-				VkViewport viewport = vks::initializers::viewport((float)deferredPass.width, (float)deferredPass.height, 0.0f, 1.0f);
-				vkCmdSetViewport(cell->commandBuffer, 0, 1, &viewport);
+					VkViewport viewport = vks::initializers::viewport((float)deferredPass.width, (float)deferredPass.height, 0.0f, 1.0f);
+					vkCmdSetViewport(cell->commandBuffer, 0, 1, &viewport);
 
-				VkRect2D scissor = vks::initializers::rect2D(deferredPass.width, deferredPass.height, 0, 0);
-				vkCmdSetScissor(cell->commandBuffer, 0, 1, &scissor);
+					VkRect2D scissor = vks::initializers::rect2D(deferredPass.width, deferredPass.height, 0, 0);
+					vkCmdSetScissor(cell->commandBuffer, 0, 1, &scissor);
 
-				vkCmdBindPipeline(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.offscreen);
+					vkCmdBindPipeline(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.offscreen);
 
-				VkDeviceSize offsets[1] = { 0 };
+					VkDeviceSize offsets[1] = { 0 };
 
-				std::vector<VkDescriptorSet> bindDescSets = {
-					descriptorSets.model,
-					textureSets.default.descriptorSet,
-				};
-				vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, static_cast<uint32_t>(bindDescSets.size()), bindDescSets.data(), 0, nullptr);
-				vkCmdBindVertexBuffers(cell->commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
-				vkCmdBindIndexBuffer(cell->commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+					std::vector<VkDescriptorSet> bindDescSets = {
+						descriptorSets.model,
+						textureSets.default.descriptorSet,
+					};
+					vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, static_cast<uint32_t>(bindDescSets.size()), bindDescSets.data(), 0, nullptr);
+					vkCmdBindVertexBuffers(cell->commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
+					vkCmdBindIndexBuffer(cell->commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-				if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
-					vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
-					vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_FLOOR, 0, 0);
-					if (cell->walls[cell->dirNorth]) {
-						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_NORTH, 0, 0);
+					if (cell->type != dungeongenerator::Cell::cellTypeEmpty) {
+						if (cell->type == dungeongenerator::Cell::cellTypeCorridor) {
+							bindDescSets[1] = textureSets.corridor.descriptorSet;
+							vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, static_cast<uint32_t>(bindDescSets.size()), bindDescSets.data(), 0, nullptr);
+						}
+						else {
+							bindDescSets[1] = textureSets.default.descriptorSet;
+							vkCmdBindDescriptorSets(cell->commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.offscreen, 0, static_cast<uint32_t>(bindDescSets.size()), bindDescSets.data(), 0, nullptr);
+						}
+						vkCmdPushConstants(cell->commandBuffer, pipelineLayouts.offscreen, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec3), &pos);
+						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_FLOOR, 0, 0);
+						if (cell->walls[cell->dirNorth]) {
+							vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_NORTH, 0, 0);
+						}
+						if (cell->walls[cell->dirSouth]) {
+							vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_SOUTH, 0, 0);
+						}
+						if (cell->walls[cell->dirEast]) {
+							vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_EAST, 0, 0);
+						}
+						if (cell->walls[cell->dirWest]) {
+							vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_WEST, 0, 0);
+						}
+						if (!topdown) {
+							vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_CEILING, 0, 0);
+						}
 					}
-					if (cell->walls[cell->dirSouth]) {
-						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_SOUTH, 0, 0);
-					}
-					if (cell->walls[cell->dirEast]) {
-						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_EAST, 0, 0);
-					}
-					if (cell->walls[cell->dirWest]) {
-						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_WALL_WEST, 0, 0);
-					}
-					if (!topdown) {
-						vkCmdDrawIndexed(cell->commandBuffer, 6, 1, INDEX_OFFSET_CEILING, 0, 0);
-					}
+
+					vkEndCommandBuffer(cell->commandBuffer);
 				}
-
-				vkEndCommandBuffer(cell->commandBuffer);
 			}
 		}
 	}
@@ -630,6 +789,10 @@ public:
 
 					#pragma omp critical
 					{
+						if (!cell->uncovered) {
+							cell->uncovered = true;
+							dungeonMap.update = true;
+						}
 						if (cell->commandBuffer != VK_NULL_HANDLE) {
 							commandBuffers.push_back(cell->commandBuffer);
 							cellsVisible++;
@@ -655,6 +818,33 @@ public:
 
 	void buildCommandBuffers()
 	{
+		if (compositionCB == VK_NULL_HANDLE) {
+			compositionCB = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_SECONDARY, false);
+
+			VkCommandBufferInheritanceInfo inheritanceInfo = vks::initializers::commandBufferInheritanceInfo();
+			inheritanceInfo.renderPass = renderPass;
+			inheritanceInfo.framebuffer = VK_NULL_HANDLE;
+
+			VkCommandBufferBeginInfo commandBufferBeginInfo = vks::initializers::commandBufferBeginInfo();
+			commandBufferBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT | VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
+			commandBufferBeginInfo.pInheritanceInfo = &inheritanceInfo;
+
+			VK_CHECK_RESULT(vkBeginCommandBuffer(compositionCB, &commandBufferBeginInfo));
+			VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
+			vkCmdSetViewport(compositionCB, 0, 1, &viewport);
+			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
+			vkCmdSetScissor(compositionCB, 0, 1, &scissor);
+			VkDeviceSize offsets[1] = { 0 };
+			vkCmdBindDescriptorSets(compositionCB, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.composition, 0, 1, &descriptorSet, 0, NULL);
+			vkCmdBindPipeline(compositionCB, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
+			vkCmdDraw(compositionCB, 4, 1, 0, 0);
+			VK_CHECK_RESULT(vkEndCommandBuffer(compositionCB));
+		}
+
+		if (renderCB == VK_NULL_HANDLE) {
+			renderCB = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, false);
+		}
+
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
 
 		VkClearValue clearValues[2];
@@ -670,32 +860,15 @@ public:
 		renderPassBeginInfo.clearValueCount = 2;
 		renderPassBeginInfo.pClearValues = clearValues;
 
-		for (int32_t i = 0; i < drawCmdBuffers.size(); ++i)
-		{
-			// Set target frame buffer
-			renderPassBeginInfo.framebuffer = frameBuffers[i];
-
-			VK_CHECK_RESULT(vkBeginCommandBuffer(drawCmdBuffers[i], &cmdBufInfo));
-
-			vkCmdBeginRenderPass(drawCmdBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
-			VkViewport viewport = vks::initializers::viewport((float)width, (float)height, 0.0f, 1.0f);
-			vkCmdSetViewport(drawCmdBuffers[i], 0, 1, &viewport);
-
-			VkRect2D scissor = vks::initializers::rect2D(width, height, 0, 0);
-			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
-
-			VkDeviceSize offsets[1] = { 0 };
-			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayouts.composition, 0, 1, &descriptorSet, 0, NULL);
-
-			// Final composition as full screen quad
-			vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines.composition);
-			vkCmdDraw(drawCmdBuffers[i], 4, 1, 0, 0);
-
-			vkCmdEndRenderPass(drawCmdBuffers[i]);
-
-			VK_CHECK_RESULT(vkEndCommandBuffer(drawCmdBuffers[i]));
+		renderPassBeginInfo.framebuffer = frameBuffers[currentBuffer];
+		VK_CHECK_RESULT(vkBeginCommandBuffer(renderCB, &cmdBufInfo));
+		vkCmdBeginRenderPass(renderCB, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
+		vkCmdExecuteCommands(renderCB, 1, &compositionCB);
+		if (dungeonMap.display) {
+			vkCmdExecuteCommands(renderCB, 1, &dungeonMap.commandBuffer);
 		}
+		vkCmdEndRenderPass(renderCB);
+		VK_CHECK_RESULT(vkEndCommandBuffer(renderCB));
 	}
 
 	void setupDescriptorPool()
@@ -741,6 +914,15 @@ public:
 				VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayouts.uniformBuffers));
 			}
 
+			// Map
+			{
+				std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+					vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT, 0),
+				};
+				VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+				VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &dungeonMap.descriptorSetLayout));
+			}
+
 			// Texture set
 			{
 				std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
@@ -761,6 +943,10 @@ public:
 			pipelineLayoutCreateInfo.pPushConstantRanges = pushConstantRanges.data();
 
 			VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayouts.offscreen));
+
+			pipelineLayoutCreateInfo.pushConstantRangeCount = 0;
+			pipelineLayoutCreateInfo.pPushConstantRanges = nullptr;
+			VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &dungeonMap.pipelineLayout));
 		}
 	}
 
@@ -812,6 +998,20 @@ public:
 			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 			// Texture sets
 			textureSets.default.createDescriptorSet(device, descriptorPool, descriptorSetLayouts.textureSet);
+			textureSets.corridor.createDescriptorSet(device, descriptorPool, descriptorSetLayouts.textureSet);
+		}
+
+		/* 
+			UI
+		*/
+		// Map
+		{
+			VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &dungeonMap.descriptorSetLayout, 1);
+			VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &dungeonMap.descriptorSet));
+			std::vector<VkWriteDescriptorSet> writeDescriptorSets = {
+				vks::initializers::writeDescriptorSet(dungeonMap.descriptorSet, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 0, &dungeonMap.uniformBuffer.descriptor),
+			};
+			vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, NULL);
 		}
 	}
 
@@ -899,6 +1099,24 @@ public:
 		colorBlendState.attachmentCount = static_cast<uint32_t>(blendAttachmentStates.size());
 		colorBlendState.pAttachments = blendAttachmentStates.data();
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipelines.offscreen));
+
+		// Dungeon map rendering
+		depthStencilState.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+		rasterizationState.cullMode = VK_CULL_MODE_NONE;
+		shaderStages[0] = loadShader(getAssetPath() + "shaders/map.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader(getAssetPath() + "shaders/map.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		pipelineCreateInfo.renderPass = renderPass;
+		blendAttachmentState.blendEnable = VK_TRUE;
+		blendAttachmentState.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+		blendAttachmentState.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		blendAttachmentState.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		blendAttachmentState.colorBlendOp = VK_BLEND_OP_ADD;
+		blendAttachmentState.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		blendAttachmentState.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+		blendAttachmentState.alphaBlendOp = VK_BLEND_OP_ADD;
+		colorBlendState.attachmentCount = 1;
+		colorBlendState.pAttachments = &blendAttachmentState;
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &dungeonMap.pipeline));
 	}
 
 	// Prepare and initialize uniform buffer containing shader uniforms
@@ -925,10 +1143,17 @@ public:
 			&uniformBuffers.fsLights,
 			sizeof(uboFragmentLights)));
 
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&dungeonMap.uniformBuffer,
+			sizeof(dungeonMap.uniforms)));
+
 		// Map persistent
 		VK_CHECK_RESULT(uniformBuffers.vsFullScreen.map());
 		VK_CHECK_RESULT(uniformBuffers.vsOffscreen.map());
 		VK_CHECK_RESULT(uniformBuffers.fsLights.map());
+		VK_CHECK_RESULT(dungeonMap.uniformBuffer.map());
 
 		// Update
 		updateUniformBuffersScreen();
@@ -955,6 +1180,7 @@ public:
 	// Update fragment shader light position uniform block
 	void updateUniformBufferDeferredLights()
 	{
+		/*
 		// White
 		uboFragmentLights.lights[0].position = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
 		uboFragmentLights.lights[0].color = glm::vec3(1.5f);
@@ -975,6 +1201,7 @@ public:
 		uboFragmentLights.lights[4].position = glm::vec4(0.0f, 0.5f, 0.0f, 0.0f);
 		uboFragmentLights.lights[4].color = glm::vec3(0.0f, 1.0f, 0.2f);
 		uboFragmentLights.lights[4].radius = 5.0f;
+		*/
 
 		// Player
 		uboFragmentLights.lights[5].color = glm::vec3(2.0f) + sin(glm::radians(360.0f * timer)) * 0.25f;
@@ -988,6 +1215,7 @@ public:
 		uboFragmentLights.lights[5].position.z -= cos(glm::radians(360.0f * timer * 2.0f)) * 0.05f;
 
 		//  Animate
+		/*
 		uboFragmentLights.lights[0].position.x = sin(glm::radians(360.0f * timer)) * 5.0f;
 		uboFragmentLights.lights[0].position.z = cos(glm::radians(360.0f * timer)) * 5.0f;
 
@@ -999,6 +1227,7 @@ public:
 
 		uboFragmentLights.lights[4].position.x = 0.0f + sin(glm::radians(360.0f * timer + 90.0f)) * 5.0f;
 		uboFragmentLights.lights[4].position.z = 0.0f - cos(glm::radians(360.0f * timer + 45.0f)) * 5.0f;
+		*/
 
 
 		// Current view position
@@ -1010,21 +1239,40 @@ public:
 	void draw()
 	{
 		VulkanExampleBase::prepareFrame();
-		submitInfo.pWaitSemaphores = &semaphores.presentComplete;
-		submitInfo.pSignalSemaphores = &deferredPass.semaphore;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &deferredPass.commandBuffer;
-		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
-		submitInfo.pWaitSemaphores = &deferredPass.semaphore;
-		submitInfo.pSignalSemaphores = &semaphores.renderComplete;
-		submitInfo.pCommandBuffers = &drawCmdBuffers[currentBuffer];
-		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+		{
+			submitInfo.pWaitSemaphores = &semaphores.presentComplete;
+			submitInfo.pSignalSemaphores = &deferredPass.semaphore;
+			submitInfo.pCommandBuffers = &deferredPass.commandBuffer;
+			submitInfo.commandBufferCount = 1;
+			VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+		}
+
+		{
+			if (dungeonMap.display) {
+				dungeonMap.rotation = player.rotation.y;
+				dungeonMap.aspectRatio = (float)height / (float)width;
+				dungeonMap.updateUniforms();
+				if (dungeonMap.update) {
+					dungeonMap.updateBuffers();
+					dungeonMap.updateCommandBuffer(renderPass, glm::vec2(width,height));
+				}
+			}
+			buildCommandBuffers();
+			submitInfo.pWaitSemaphores = &deferredPass.semaphore;
+			submitInfo.pSignalSemaphores = &semaphores.renderComplete;
+			submitInfo.pCommandBuffers = &renderCB;
+			submitInfo.commandBufferCount = 1;
+			VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
+		}
 		VulkanExampleBase::submitFrame();
 	}
 
 	void prepare()
 	{
 		VulkanExampleBase::prepare();
+
+		globals.device = vulkanDevice;
+
 		loadAssets();
 		preparedeferredPassfer();
 		prepareUniformBuffers();
@@ -1034,6 +1282,11 @@ public:
 		setupDescriptorSets();
 		buildVertexBuffers();
 
+		dungeonMap.commandBuffer = VulkanExampleBase::createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_SECONDARY, false);
+		dungeonMap.dungeon = this->dungeon;
+		dungeonMap.player = &this->player;
+		dungeonMap.updateBuffers();
+		
 		generateCellCommandBuffers();
 
 		buildCommandBuffers();
@@ -1099,6 +1352,9 @@ public:
 			case KEY_D:
 				player.move(glm::vec3(1.0f, 0.0f, 0.0f), animate);
 				updateReq = true;
+				break;
+			case KEY_M:
+				dungeonMap.display = !dungeonMap.display;
 				break;
 		}
 		if (updateReq) {
