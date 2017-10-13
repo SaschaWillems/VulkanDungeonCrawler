@@ -100,7 +100,7 @@ bool Player::updateFreeLook(float timeFactor) {
 	float freeLookSpeed = 65.0f;
 	float freeLookRebound = 0.25f;
 	bool viewChange = false;
-	glm::vec3 freeLookLimits = glm::vec3(7.5f, 7.5f, 0.0f);
+	glm::vec3 freeLookLimits = glm::vec3(12.5f, 15.0f, 0.0f);
 	if (freeLook) {
 		freeLookRotation.y += freeLookDelta.x * timeFactor * freeLookSpeed;
 		freeLookRotation.x += freeLookDelta.y * timeFactor * freeLookSpeed;

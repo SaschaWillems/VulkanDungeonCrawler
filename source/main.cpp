@@ -184,6 +184,24 @@ struct DungeonMap {
 
 		update = false;
 	}
+
+	bool checkVisibility(glm::ivec2 from, glm::ivec2 to) {
+		float difX = to.x - from.x;
+		float difY = to.y - from.y;
+		float dist = abs(difX) + abs(difY);
+
+		float dx = difX / dist;
+		float dy = difY / dist;
+
+		for (uint32_t i = 0; i <= ceil(dist); i++) {
+			uint32_t x = floor(from.x + dx * i);
+			uint32_t y = floor(from.y + dy * i);
+			if (dungeon->getCell(x, y)->type == dungeongenerator::Cell::cellTypeEmpty) {
+				return false;
+			}
+		}
+		return true;
+	}
 };
 
 class VulkanExample : public VulkanExampleBase
@@ -794,8 +812,11 @@ public:
 					#pragma omp critical
 					{
 						if (!cell->uncovered) {
-							cell->uncovered = true;
-							dungeonMap.update = true;
+							glm::ivec2 start = glm::ivec2(round(player.position.x), round(player.position.z));
+							if (dungeonMap.checkVisibility(start, glm::ivec2(x, y))) {
+								cell->uncovered = true;
+								dungeonMap.update = true;
+							}
 						}
 						if (cell->commandBuffer != VK_NULL_HANDLE) {
 							commandBuffers.push_back(cell->commandBuffer);
