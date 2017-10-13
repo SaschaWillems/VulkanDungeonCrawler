@@ -764,6 +764,10 @@ public:
 
 		VK_CHECK_RESULT(vkBeginCommandBuffer(deferredPass.commandBuffer, &cmdBufInfo));
 
+		if (vks::debugmarker::active) {
+			vks::debugmarker::beginRegion(deferredPass.commandBuffer, "Dungeon", glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+		}
+
 		vkCmdBeginRenderPass(deferredPass.commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
 
 		// Render dungeon cells
@@ -807,6 +811,10 @@ public:
 		}
 
 		vkCmdEndRenderPass(deferredPass.commandBuffer);
+
+		if (vks::debugmarker::active) {
+			vks::debugmarker::endRegion(deferredPass.commandBuffer);
+		}
 
 		VK_CHECK_RESULT(vkEndCommandBuffer(deferredPass.commandBuffer));
 	}
@@ -865,7 +873,13 @@ public:
 		vkCmdBeginRenderPass(renderCB, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS);
 		vkCmdExecuteCommands(renderCB, 1, &compositionCB);
 		if (dungeonMap.display) {
+			if (vks::debugmarker::active) {
+				vks::debugmarker::beginRegion(renderCB, "Map overlay", glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+			}
 			vkCmdExecuteCommands(renderCB, 1, &dungeonMap.commandBuffer);
+			if (vks::debugmarker::active) {
+				vks::debugmarker::endRegion(renderCB);
+			}
 		}
 		vkCmdEndRenderPass(renderCB);
 		VK_CHECK_RESULT(vkEndCommandBuffer(renderCB));
