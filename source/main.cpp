@@ -75,7 +75,9 @@ struct DungeonMap {
 	vks::Buffer uniformBuffer;
 	vks::Buffer vertexBuffer;
 	vks::Buffer indexBuffer;
-	uint32_t indexCount = 0;
+	uint32_t vertexOffsetLines = 0;
+	uint32_t indexCountTiles = 0;
+	uint32_t indexCountLines = 0;
 	struct Uniforms {
 		glm::mat4 projection;
 		glm::mat4 model;
@@ -83,6 +85,7 @@ struct DungeonMap {
 	} uniforms;
 	VkPipelineLayout pipelineLayout;
 	VkPipeline pipeline;
+	VkPipeline pipelineWalls;
 	VkDescriptorSetLayout descriptorSetLayout;
 	VkDescriptorSet descriptorSet;
 	dungeongenerator::Dungeon *dungeon;
@@ -101,18 +104,45 @@ struct DungeonMap {
 	}
 
 	void updateBuffers() {
+		struct Vertex {
+			float position[3];
+			float color[3];
+		};
+
+#define COLOR_WHITE { 1.0f, 1.0f, 1.0f }
+
 		// Vertex buffer (only once)
 		std::vector<Vertex> vertices;
 		if ((vertexBuffer.buffer == VK_NULL_HANDLE)) {
 			const float d = 0.45f;
+			// Tiles
 			for (uint32_t x = 0; x < dungeon->width; x++) {
 				for (uint32_t y = 0; y < dungeon->width; y++) {
-					vertices.push_back({ { -d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 0.0f, 1.0f } });
-					vertices.push_back({ {  d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } });
-					vertices.push_back({ { -d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } });
-					vertices.push_back({ {  d + x, -d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } });
-					vertices.push_back({ {  d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f, 1.0f } });
-					vertices.push_back({ { -d + x,  d + y, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 1.0f, 1.0f, 1.0f } });
+					vertices.push_back({ { -d + x, -d + y, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ {  d + x, -d + y, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { -d + x,  d + y, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ {  d + x, -d + y, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ {  d + x,  d + y, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { -d + x,  d + y, 0.0f }, COLOR_WHITE });
+				}
+			}
+			// Walls
+			vertexOffsetLines = static_cast<uint32_t>(vertices.size());
+			const float wd = 0.5f;
+			for (uint32_t x = 0; x < dungeon->width; x++) {
+				for (uint32_t y = 0; y < dungeon->width; y++) {
+					// N
+					vertices.push_back({ { x - wd, y - wd, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { x + wd, y - wd, 0.0f }, COLOR_WHITE });
+					// S
+					vertices.push_back({ { x - wd, y + wd, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { x + wd, y + wd, 0.0f }, COLOR_WHITE });
+					// E
+					vertices.push_back({ { x + wd, y - wd, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { x + wd, y + wd, 0.0f }, COLOR_WHITE });
+					// W
+					vertices.push_back({ { x - wd, y - wd, 0.0f }, COLOR_WHITE });
+					vertices.push_back({ { x - wd, y + wd, 0.0f }, COLOR_WHITE });
 				}
 			}
 			VkDeviceSize vertexBufferSize = vertices.size() * sizeof(Vertex);
@@ -140,10 +170,36 @@ struct DungeonMap {
 					idx += 6;
 				}
 			}
+			indexCountTiles = static_cast<uint32_t>(indices.size());
+			idx = vertexOffsetLines;
+			for (uint32_t x = 0; x < dungeon->width; x++) {
+				for (uint32_t y = 0; y < dungeon->width; y++) {
+					dungeongenerator::Cell *cell = dungeon->getCell(x, y);
+					if (cell->uncovered) {
+						if (cell->walls[dungeongenerator::Cell::dirNorth]) {
+							indices.push_back(idx + 0);
+							indices.push_back(idx + 1);
+						}
+						if (cell->walls[dungeongenerator::Cell::dirSouth]) {
+							indices.push_back(idx + 2);
+							indices.push_back(idx + 3);
+						}
+						if (cell->walls[dungeongenerator::Cell::dirEast]) {
+							indices.push_back(idx + 4);
+							indices.push_back(idx + 5);
+						}
+						if (cell->walls[dungeongenerator::Cell::dirWest]) {
+							indices.push_back(idx + 6);
+							indices.push_back(idx + 7);
+						}
+					}
+					idx += 8;
+				}
+			}
+			indexCountLines = static_cast<uint32_t>(indices.size()) - indexCountTiles;
 			VkDeviceSize indexBufferSize = indices.size() * sizeof(uint32_t);
 			if (indexBufferSize > 0) {
 				VK_CHECK_RESULT(globals.device->createBuffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &indexBuffer, indexBufferSize, indices.data()));
-				indexCount = static_cast<uint32_t>(indices.size());
 				indexBuffer.map();
 				indexBuffer.flush();
 				indexBuffer.unmap();
@@ -170,14 +226,18 @@ struct DungeonMap {
 		VkDeviceSize offsets[1] = { 0 };
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
 
-		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
 		vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-		if (indexCount > 0) {
+		if (indexCountTiles > 0) {
 			vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer.buffer, offsets);
 			vkCmdBindIndexBuffer(commandBuffer, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-			vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+			vkCmdDrawIndexed(commandBuffer, indexCountTiles, 1, 0, 0, 0);
+
+			vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineWalls);
+			vkCmdDrawIndexed(commandBuffer, indexCountLines, 1, indexCountTiles, 0, 0);
 		}
 
 		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
@@ -1135,7 +1195,19 @@ public:
 		colorBlendState.pAttachments = blendAttachmentStates.data();
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipelines.offscreen));
 
-		// Dungeon map rendering
+		/*
+			Dungeon map rendering
+		*/
+
+		vertexInputBindings = {
+			vks::initializers::vertexInputBindingDescription(0, sizeof(float) * 6, VK_VERTEX_INPUT_RATE_VERTEX),
+		};
+		vertexInputAttributes = {
+			vks::initializers::vertexInputAttributeDescription(0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0),
+			vks::initializers::vertexInputAttributeDescription(0, 1, VK_FORMAT_R32G32B32_SFLOAT, sizeof(float) * 3),
+		};
+		vertexInputState.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexInputAttributes.size());
+
 		depthStencilState.depthCompareOp = VK_COMPARE_OP_ALWAYS;
 		rasterizationState.cullMode = VK_CULL_MODE_NONE;
 		shaderStages[0] = loadShader(getAssetPath() + "shaders/map.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
@@ -1152,6 +1224,11 @@ public:
 		colorBlendState.attachmentCount = 1;
 		colorBlendState.pAttachments = &blendAttachmentState;
 		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &dungeonMap.pipeline));
+
+		inputAssemblyState.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+		rasterizationState.lineWidth = 2.0f;
+		blendAttachmentState.blendEnable = VK_FALSE;
+		VK_CHECK_RESULT(vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &dungeonMap.pipelineWalls));
 	}
 
 	// Prepare and initialize uniform buffer containing shader uniforms
